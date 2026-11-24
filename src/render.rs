@@ -91,6 +91,10 @@ a{color:inherit}.top{height:45px;display:flex;align-items:center;padding:0 12px;
 .doc details{margin:2px 0}.doc details>div{padding-left:1.4em}.doc table{border-collapse:collapse;margin:8px 0}.doc td{border:1px solid var(--line);padding:6px 8px;font-size:14px}
 .doc .bm{display:block;border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin:6px 0;font-size:13px;text-decoration:none;word-break:break-all}.loading{color:var(--mut);padding:24px 0}
 .tc-gray{color:rgb(120,119,116)}.tc-brown{color:rgb(159,107,83)}.tc-orange{color:rgb(217,115,13)}.tc-yellow{color:rgb(203,145,47)}.tc-green{color:rgb(68,131,97)}.tc-blue{color:rgb(51,126,169)}.tc-purple{color:rgb(144,101,176)}.tc-pink{color:rgb(193,76,138)}.tc-red{color:rgb(212,76,71)}
+.top a.set{text-decoration:none;color:var(--mut);padding:2px 6px;border-radius:4px;font-size:13px}.top a.set:hover{background:var(--hover)}
+.setup{max-width:520px;display:flex;flex-direction:column;gap:10px}.setup label{font-weight:500}.setup .note{color:var(--mut);font-size:13px;margin:0}
+.setup input{padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit}
+.setup button{align-self:flex-start;padding:6px 14px;border-radius:6px;border:0;background:rgb(35,131,226);color:#fff;font:inherit;font-weight:500;cursor:pointer}
 @media (max-width:800px){.wrap{padding:0 16px 40px}h1{font-size:30px;margin-top:20px}#pkb{padding:0 20px 40px}}"#;
 
 const JS: &str = r#"const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
@@ -123,6 +127,7 @@ pub struct Page<'a> {
     pub clients: &'a HashMap<String, String>,
     pub age_secs: u64,
     pub error: Option<&'a str>,
+    pub settings: bool,
 }
 
 pub fn page(p: &Page) -> String {
@@ -133,9 +138,10 @@ pub fn page(p: &Page) -> String {
         h,
         "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
 <title>{} · View of Tasks</title><link rel=icon href=\"data:,\"><style>{CSS}</style></head><body>\
-<div class=top><span class=crumb>Charles</span><span class=sp></span><input id=q type=search placeholder=\"Search  /\" autocomplete=off></div>\
+<div class=top><span class=crumb>Charles</span><span class=sp></span>{}<input id=q type=search placeholder=\"Search  /\" autocomplete=off></div>\
 <div class=wrap><h1>View of Tasks</h1><div class=tabs>",
-        esc(title)
+        esc(title),
+        if p.settings { "<a class=set href=/setup>Settings</a>" } else { "" }
     );
     let done_q = if p.done { "?done=1" } else { "" };
     for v in VIEWS {
@@ -203,6 +209,29 @@ pub fn page(p: &Page) -> String {
         h,
         "</div><aside id=peek hidden><div class=pkbar><button id=pkx title=Close>✕</button><span class=sp></span>\
 <a id=pkn target=_blank rel=noopener>Open in Notion ↗</a></div><div id=pkb></div></aside><script>{JS}</script></body></html>"
+    );
+    h
+}
+
+pub fn setup(error: Option<&str>, has_token: bool) -> String {
+    let mut h = String::with_capacity(16 * 1024);
+    let _ = write!(
+        h,
+        "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
+<title>Settings · Notion Lite</title><link rel=icon href=\"data:,\"><style>{CSS}</style></head><body>\
+<div class=top><span class=crumb>Charles</span><span class=sp></span>{}</div>\
+<div class=wrap><h1>Connect to Notion</h1><form class=setup method=post action=/setup>",
+        if has_token { "<a class=set href=/v/priority>Back to board</a>" } else { "" }
+    );
+    if let Some(e) = error {
+        let _ = write!(h, "<div class=err>{}</div>", esc(e));
+    }
+    h.push_str(
+        "<label for=tok>Internal integration secret</label>\
+<input id=tok name=token type=password placeholder=\"ntn_…\" autocomplete=off spellcheck=false required autofocus>\
+<p class=note>Use the secret of a Notion internal integration (it starts with ntn_). The Tasks and Clients databases must be shared with that integration \
+(database menu, Connections). The secret is kept in Windows Credential Manager on this computer only.</p>\
+<button type=submit>Save</button></form></div></body></html>",
     );
     h
 }

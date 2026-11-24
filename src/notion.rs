@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 const API: &str = "https://api.notion.com/v1";
@@ -34,7 +35,7 @@ pub struct Task {
 #[derive(Clone)]
 pub struct Notion {
     http: reqwest::Client,
-    token: String,
+    token: Arc<RwLock<String>>,
 }
 
 impl Notion {
@@ -44,13 +45,31 @@ impl Notion {
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .expect("http client");
-        Self { http, token }
+        Self { http, token: Arc::new(RwLock::new(token)) }
+    }
+
+    pub fn has_token(&self) -> bool {
+        !self.token.read().unwrap_or_else(|e| e.into_inner()).is_empty()
+    }
+
+    pub fn set_token(&self, token: String) {
+        *self.token.write().unwrap_or_else(|e| e.into_inner()) = token;
+    }
+
+    /// Asks Notion who the given token belongs to; Err carries Notion's message.
+    pub async fn check_token(&self, token: &str) -> Result<(), String> {
+        self.send(self.req_as(reqwest::Method::GET, "/users/me", token)).await.map(|_| ())
     }
 
     fn req(&self, m: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let token = self.token.read().unwrap_or_else(|e| e.into_inner()).clone();
+        self.req_as(m, path, &token)
+    }
+
+    fn req_as(&self, m: reqwest::Method, path: &str, token: &str) -> reqwest::RequestBuilder {
         self.http
             .request(m, format!("{API}{path}"))
-            .bearer_auth(&self.token)
+            .bearer_auth(token)
             .header("Notion-Version", VERSION)
     }
 
