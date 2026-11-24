@@ -34,7 +34,7 @@ pub enum Auth {
     None,
     /// The full expected Authorization header value.
     Basic(String),
-    /// Per-launch secret: `?k=<secret>` is swapped for a session cookie.
+    /// Per-launch secret: a matching `k` query parameter is swapped for a session cookie.
     Secret(String),
 }
 
@@ -272,8 +272,12 @@ async fn setup_save(State(app): State<S>, Form(f): Form<SetupForm>) -> Response 
         eprintln!("error: saving token: {e}");
         return setup_html(Some(&format!("Could not save the token: {e}")), has);
     }
-    app.notion.set_token(token);
-    app.cache.write().await.clear();
+    {
+        // Hold the refresh lock so a request still using the old token cannot re-cache its 401.
+        let _g = app.inflight.lock().await;
+        app.notion.set_token(token);
+        app.cache.write().await.clear();
+    }
     let a = app.clone();
     tokio::spawn(async move { a.warm().await });
     Redirect::to("/v/priority").into_response()

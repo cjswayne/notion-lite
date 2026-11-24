@@ -86,7 +86,9 @@ fn main() {
                     url.scheme() == "about"
                 })
                 .on_new_window(move |url, _features| {
-                    open_external(&popup, &url);
+                    if !is_local(&url, port) {
+                        open_external(&popup, &url);
+                    }
                     NewWindowResponse::Deny
                 })
                 .build()?;
