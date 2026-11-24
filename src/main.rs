@@ -88,8 +88,9 @@ impl App {
             m
         };
         for id in missing {
-            let name = self.notion.page_title(&id).await.unwrap_or_default();
-            self.clients.write().await.insert(id, name);
+            if let Ok(name) = self.notion.page_title(&id).await {
+                self.clients.write().await.insert(id, name);
+            }
         }
     }
 }
