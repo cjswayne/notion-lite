@@ -96,6 +96,7 @@ impl App {
 }
 
 fn cache_key(slug: &str, done: bool) -> String {
+    let slug = views::canonical(slug);
     if done { format!("{slug}:done") } else { slug.to_string() }
 }
 
@@ -111,13 +112,14 @@ async fn view(State(app): State<S>, Path(slug): Path<String>, Query(q): Query<Vi
     }
     let done = q.done.is_some();
     let key = cache_key(&slug, done);
+    let fetch_slug = views::canonical(&slug).to_string();
     let state = app.cache.read().await.get(&key).map(|e| e.at.elapsed());
     match state {
-        None => app.refresh(&slug, done).await,
-        Some(_) if q.refresh.is_some() => app.refresh(&slug, done).await,
+        None => app.refresh(&fetch_slug, done).await,
+        Some(_) if q.refresh.is_some() => app.refresh(&fetch_slug, done).await,
         Some(age) if age > FRESH => {
             // Stale-while-revalidate: serve the cached board now, refresh behind it.
-            let (a, s) = (app.clone(), slug.clone());
+            let (a, s) = (app.clone(), fetch_slug.clone());
             tokio::spawn(async move { a.refresh(&s, done).await });
         }
         _ => {}
@@ -133,7 +135,6 @@ async fn view(State(app): State<S>, Path(slug): Path<String>, Query(q): Query<Vi
         clients: &clients,
         age_secs: ent.map(|e| e.at.elapsed().as_secs()).unwrap_or(0),
         error: ent.and_then(|e| e.err.as_deref()),
-        now_unix: now_unix(),
     });
     ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response()
 }
@@ -144,7 +145,25 @@ struct StatusForm {
     back: String,
 }
 
-async fn set_status(State(app): State<S>, Path(id): Path<String>, Form(f): Form<StatusForm>) -> Response {
+async fn peek(State(app): State<S>, Path(id): Path<String>) -> Response {
+    let task = match app.notion.page(&id).await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("<div class=err>{}</div>", render::esc(&e))).into_response(),
+    };
+    app.resolve_clients(std::slice::from_ref(&task)).await;
+    let mut budget = 400;
+    let blocks = app.notion.blocks(&id, 0, &mut budget).await.unwrap_or_default();
+    let clients = app.clients.read().await;
+    Html(render::peek(&task, &clients, &blocks, now_unix())).into_response()
+}
+
+async fn set_status(
+    State(app): State<S>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Form(f): Form<StatusForm>,
+) -> Response {
+    let from_js = headers.contains_key("x-fetch");
     let back = if f.back.starts_with("/v/") { f.back } else { "/".into() };
     if !views::STATUSES.contains(&f.s.as_str()) {
         return Redirect::to(&back).into_response();
@@ -166,6 +185,9 @@ async fn set_status(State(app): State<S>, Path(id): Path<String>, Form(f): Form<
             }
             ent.tasks = Arc::new(v);
         }
+    }
+    if from_js {
+        return StatusCode::NO_CONTENT.into_response();
     }
     Redirect::to(&back).into_response()
 }
@@ -218,7 +240,7 @@ async fn main() {
     let warm = app.clone();
     tokio::spawn(async move {
         loop {
-            for v in views::VIEWS {
+            for v in views::VIEWS.iter().filter(|v| views::canonical(v.slug) == v.slug) {
                 warm.refresh(v.slug, false).await;
             }
             tokio::time::sleep(FRESH).await;
@@ -226,9 +248,10 @@ async fn main() {
     });
 
     let router = Router::new()
-        .route("/", get(|| async { Redirect::to("/v/mine") }))
+        .route("/", get(|| async { Redirect::to("/v/priority") }))
         .route("/v/:slug", get(view))
         .route("/t/:id", post(set_status))
+        .route("/p/:id", get(peek))
         .layer(middleware::from_fn_with_state(app.clone(), require_login))
         .route("/healthz", get(|| async { "ok" }))
         .layer(tower_http::compression::CompressionLayer::new())

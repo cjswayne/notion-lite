@@ -11,12 +11,19 @@ pub struct Tag {
 }
 
 #[derive(Clone, Debug)]
+pub struct Person {
+    pub name: String,
+    pub avatar: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct Task {
     pub id: String,
     pub url: String,
     pub name: String,
     pub status: String,
     pub tags: Vec<Tag>,
+    pub agents: Vec<Person>,
     pub clients: Vec<String>,
     pub milestone: String,
     pub summary: String,
@@ -113,6 +120,43 @@ impl Notion {
         Ok(String::new())
     }
 
+    pub async fn page(&self, id: &str) -> Result<Task, String> {
+        let v = self.send(self.req(reqwest::Method::GET, &format!("/pages/{id}"))).await?;
+        Ok(parse_task(&v))
+    }
+
+    /// Page body, with nested children attached under "children" (depth and size capped to stay fast).
+    pub async fn blocks(&self, id: &str, depth: u8, budget: &mut usize) -> Result<Vec<Value>, String> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut path = format!("/blocks/{id}/children?page_size=100");
+            if let Some(c) = &cursor {
+                path.push_str(&format!("&start_cursor={c}"));
+            }
+            let v = self.send(self.req(reqwest::Method::GET, &path)).await?;
+            for mut b in v["results"].as_array().cloned().unwrap_or_default() {
+                if *budget == 0 {
+                    return Ok(out);
+                }
+                *budget -= 1;
+                let skip = matches!(b["type"].as_str(), Some("child_page" | "child_database"));
+                if depth < 3 && !skip && b["has_children"].as_bool() == Some(true) {
+                    if let Some(cid) = b["id"].as_str().map(String::from) {
+                        let kids = Box::pin(self.blocks(&cid, depth + 1, budget)).await.unwrap_or_default();
+                        b["children"] = Value::Array(kids);
+                    }
+                }
+                out.push(b);
+            }
+            match (v["has_more"].as_bool(), v["next_cursor"].as_str()) {
+                (Some(true), Some(c)) => cursor = Some(c.to_string()),
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn set_status(&self, id: &str, status: &str) -> Result<(), String> {
         let body = json!({"properties": {"Status": {"select": {"name": status}}}});
         self.send(self.req(reqwest::Method::PATCH, &format!("/pages/{id}")).json(&body))
@@ -121,7 +165,7 @@ impl Notion {
     }
 }
 
-fn plain(rich: &Value) -> String {
+pub fn plain(rich: &Value) -> String {
     rich.as_array()
         .map(|a| a.iter().filter_map(|t| t["plain_text"].as_str()).collect())
         .unwrap_or_default()
@@ -143,6 +187,17 @@ fn parse_task(p: &Value) -> Task {
                     .map(|t| Tag {
                         name: t["name"].as_str().unwrap_or("").into(),
                         color: t["color"].as_str().unwrap_or("default").into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        agents: props["Agent"]["people"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|u| Person {
+                        name: u["name"].as_str().unwrap_or("").into(),
+                        avatar: u["avatar_url"].as_str().unwrap_or("").into(),
                     })
                     .collect()
             })

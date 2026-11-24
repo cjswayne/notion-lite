@@ -20,6 +20,7 @@ pub struct View {
     pub slug: &'static str,
     pub name: &'static str,
     pub filter: fn() -> Value,
+    pub sub_group_client: bool,
 }
 
 fn me() -> Value {
@@ -34,40 +35,54 @@ fn client_not(id: &str) -> Value {
 fn tag(t: &str) -> Value {
     json!({"property": "Tags", "multi_select": {"contains": t}})
 }
+fn only_me() -> Value {
+    json!({"and": [me()]})
+}
+fn priority_tag() -> Value {
+    json!({"and": [me(), tag("Priority")]})
+}
 
+const fn v(slug: &'static str, name: &'static str, filter: fn() -> Value) -> View {
+    View { slug, name, filter, sub_group_client: false }
+}
+
+/// Same tabs, order and filters as the "View of Tasks" board on the Charles page.
 pub const VIEWS: &[View] = &[
-    View { slug: "mine", name: "Mine", filter: || json!({"and": [me()]}) },
-    View {
-        slug: "priority",
-        name: "Priority",
-        filter: || json!({"or": [{"and": [me(), tag("Priority")]}, {"and": [me(), tag("Urgent")]}]}),
-    },
-    View { slug: "datify", name: "Datify", filter: || json!({"and": [me(), client_is(DATIFY)]}) },
-    View {
-        slug: "clients",
-        name: "Clients",
-        filter: || json!({"and": [me(), client_not(DATIFY), client_not(CLIENT_373), client_not(CLIENT_175)]}),
-    },
-    View {
-        slug: "unassigned",
-        name: "Unassigned",
-        filter: || json!({"and": [me(), client_not(CLIENT_373), client_not(DATIFY)]}),
-    },
-    View { slug: "bugs", name: "Bugs", filter: || json!({"and": [me(), tag("Bug")]}) },
-    View {
-        slug: "all",
-        name: "All",
-        filter: || {
-            json!({"or": [
-                {"and": [me(), client_not(CLIENT_029), client_not(DATIFY), client_not(CLIENT_373)]},
-                {"and": [me(), client_is(CLIENT_029), tag("Bug")]}
-            ]})
-        },
-    },
+    v("priority", "Priority", || json!({"or": [{"and": [me(), tag("Priority")]}, {"and": [me(), tag("Urgent")]}]})),
+    v("datify", "Datify", || json!({"and": [me(), client_is(DATIFY)]})),
+    v("apps", "Apps", only_me),
+    v("apt-1", "APT (1)", only_me),
+    View { slug: "bugs", name: "Bugs", filter: only_me, sub_group_client: true },
+    v("unassigned", "Unassigned", || json!({"and": [me(), client_not(CLIENT_373), client_not(DATIFY)]})),
+    v("clients", "Clients", || json!({"and": [me(), client_not(DATIFY), client_not(CLIENT_373), client_not(CLIENT_175)]})),
+    v("client-priority", "Client Priority", priority_tag),
+    v("priority-2", "Priority", priority_tag),
+    v("charles", "Charles", only_me),
+    v("calendar", "Calendar", only_me),
+    v("badgezilla", "Badgezilla", only_me),
+    v("private-apps", "Private Apps", only_me),
+    v("flex-theme-sections", "Flex Theme Sections", only_me),
+    v("section-tasks", "Section Tasks", || json!({"and": [me(), {"property": "Name", "title": {"contains": "JPFT"}}]})),
+    v("linear-shopping-exps", "Linear Shopping Exps", only_me),
+    v("app-admin-interface", "App Admin Interface", only_me),
+    v("taxonomy-manager", "Taxonomy Manager", only_me),
+    v("all", "All", || {
+        json!({"or": [
+            {"and": [me(), client_not(CLIENT_029), client_not(DATIFY), client_not(CLIENT_373)]},
+            {"and": [me(), client_is(CLIENT_029), tag("Bug")]}
+        ]})
+    }),
 ];
 
 pub fn find(slug: &str) -> Option<&'static View> {
     VIEWS.iter().find(|v| v.slug == slug)
+}
+
+/// Views with identical filters share one cache entry, so Notion is queried once per distinct filter.
+pub fn canonical(slug: &str) -> &'static str {
+    let Some(v) = find(slug) else { return "" };
+    let f = (v.filter)();
+    VIEWS.iter().find(|o| (o.filter)() == f).map(|o| o.slug).unwrap_or(v.slug)
 }
 
 /// Pushes leaves into every inner `and` so filters stay within Notion's two-level nesting limit.
